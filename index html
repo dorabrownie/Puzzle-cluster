@@ -1,1 +1,353 @@
-brownie
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apple Worm - Puzzle Game</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Press Start 2P', cursive;
+            background-color: #1a202c; /* bg-gray-900 */
+            color: #a0aec0; /* text-gray-400 */
+            overflow: hidden;
+        }
+        canvas {
+            background-color: #2d3748; /* bg-gray-800 */
+            border: 4px solid #4a5568; /* border-gray-700 */
+            border-radius: 8px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 1rem;
+        }
+        .button {
+            background-color: #4a5568; /* bg-gray-700 */
+            border: 2px solid #718096; /* border-gray-500 */
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.1s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+        }
+        .button:hover {
+            background-color: #718096; /* bg-gray-500 */
+        }
+        .button:active {
+            transform: translateY(2px);
+        }
+        .modal {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(45, 55, 72, 0.9); /* bg-gray-800 with opacity */
+            padding: 2rem;
+            border-radius: 1rem;
+            border: 2px solid #4a5568; /* border-gray-700 */
+            text-align: center;
+            color: white;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="game-container">
+        <h1 class="text-3xl sm:text-4xl text-yellow-400 mb-4">Apple Worm Puzzles</h1>
+        <div class="flex space-x-4 sm:space-x-8 mb-4 text-base sm:text-lg">
+            <p>Level: <span id="level-display" class="text-white">1</span></p>
+            <p>Moves: <span id="moves-display" class="text-white">0</span></p>
+            <p>Apples Left: <span id="apples-display" class="text-white">0</span></p>
+        </div>
+        
+        <canvas id="gameCanvas"></canvas>
+
+        <div id="message-box" class="modal hidden">
+            <h2 id="message-title" class="text-2xl mb-4"></h2>
+            <p id="message-text" class="mb-6"></p>
+            <button id="message-button" class="button">OK</button>
+        </div>
+
+        <div class="mt-4 flex space-x-4">
+            <button id="reset-level-button" class="button">Reset Level</button>
+            <button id="reset-game-button" class="button">Reset Game</button>
+        </div>
+    </div>
+
+    <script>
+        // --- Game Setup ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const levelDisplay = document.getElementById('level-display');
+        const movesDisplay = document.getElementById('moves-display');
+        const applesDisplay = document.getElementById('apples-display');
+        const resetLevelButton = document.getElementById('reset-level-button');
+        const resetGameButton = document.getElementById('reset-game-button');
+        const messageBox = document.getElementById('message-box');
+        const messageTitle = document.getElementById('message-title');
+        const messageText = document.getElementById('message-text');
+        const messageButton = document.getElementById('message-button');
+
+        let TILE_SIZE;
+        let GRID_WIDTH, GRID_HEIGHT;
+
+        // --- Game State ---
+        let levelNum, levelData, worm, targetLength, moves, isProcessing, applesRemaining;
+
+        // --- Level Definitions ---
+        // W = Wall, S = Start, A = Apple, P = Portal
+        const LEVELS = [
+            [ // Level 1: Simple gap
+                "WWWWWWWWWWWW",
+                "W          W",
+                "W S  A   P W",
+                "W    WWWWWWW",
+                "W          W",
+                "WWWWWWWWWWWW",
+            ],
+            [ // Level 2: Two apples, requires specific path
+                "WWWWWWWWWWWW",
+                "W P W  A   W",
+                "W   W  WWWWW",
+                "W S W      W",
+                "W   WWWW A W",
+                "W          W",
+                "WWWWWWWWWWWW",
+            ],
+            [ // Level 3: Spiral, requires length to escape
+                "WWWWWWWWWWWW",
+                "W   A      W",
+                "W WWWWWWWW W",
+                "W W      W W",
+                "W W  S   W W",
+                "W WWWWWW W W",
+                "W A      P W",
+                "WWWWWWWWWWWW",
+            ],
+            [ // Level 4: Use your body as a bridge
+                "WWWWWWWWWWWWWWWW",
+                "W              W",
+                "W A  S         W",
+                "W WWWWWWWWWWWW W",
+                "W              W",
+                "W WWWWWWWWWWWW W",
+                "W          A P W",
+                "WWWWWWWWWWWWWWWW",
+            ]
+        ];
+
+        // --- Utility Functions ---
+        const get = (x, y) => (levelData[y] && levelData[y][x]) ? levelData[y][x] : ' ';
+        const isWormAt = (x, y) => worm.some(seg => seg.x === x && seg.y === y);
+
+        function resizeCanvas() {
+            const container = document.querySelector('.game-container');
+            const availableWidth = container.clientWidth * 0.9;
+            const availableHeight = window.innerHeight * 0.55;
+            
+            TILE_SIZE = Math.floor(Math.min(availableWidth / GRID_WIDTH, availableHeight / GRID_HEIGHT));
+            
+            canvas.width = TILE_SIZE * GRID_WIDTH;
+            canvas.height = TILE_SIZE * GRID_HEIGHT;
+            
+            draw();
+        }
+
+        function showMessage(title, text, buttonText = 'Next Level') {
+            isProcessing = true; // Pause input
+            messageTitle.textContent = title;
+            messageText.textContent = text;
+            messageButton.textContent = buttonText;
+            messageBox.classList.remove('hidden');
+        }
+
+        // --- Game Logic ---
+        function initLevel(newLevelNum) {
+            levelNum = newLevelNum;
+            if (levelNum > LEVELS.length) {
+                showMessage("You Win!", "You've completed all levels!", "Play Again");
+                return;
+            }
+
+            levelData = [...LEVELS[levelNum - 1]];
+            GRID_WIDTH = levelData[0].length;
+            GRID_HEIGHT = levelData.length;
+
+            let startPos;
+            applesRemaining = 0;
+            for (let y = 0; y < GRID_HEIGHT; y++) {
+                for (let x = 0; x < GRID_WIDTH; x++) {
+                    if (get(x,y) === 'S') startPos = { x, y };
+                    if (get(x,y) === 'A') applesRemaining++;
+                }
+            }
+
+            worm = [startPos];
+            targetLength = 3; // Initial length
+            moves = 0;
+            isProcessing = false;
+
+            levelDisplay.textContent = levelNum;
+            movesDisplay.textContent = moves;
+            applesDisplay.textContent = applesRemaining;
+            messageBox.classList.add('hidden');
+            
+            resizeCanvas();
+            applyGravity();
+        }
+
+        function isSolidForWorm(x, y) {
+            const tile = get(x, y);
+            // Portal is solid until all apples are eaten
+            if (tile === 'P' && applesRemaining > 0) return true;
+            // Walls and the worm's own body are solid
+            return tile === 'W' || isWormAt(x, y);
+        }
+
+        function applyGravity() {
+            return new Promise(resolve => {
+                const gravityInterval = setInterval(() => {
+                    let canFall = true;
+                    for (const segment of worm) {
+                        if (isSolidForWorm(segment.x, segment.y + 1)) {
+                            canFall = false;
+                            break;
+                        }
+                    }
+
+                    if (canFall) {
+                        worm.forEach(segment => segment.y++);
+                        draw();
+                    } else {
+                        clearInterval(gravityInterval);
+                        resolve();
+                    }
+                }, 100);
+            });
+        }
+
+        async function moveWorm(dx, dy) {
+            if (isProcessing) return;
+            isProcessing = true;
+
+            const head = worm[0];
+            const newHead = { x: head.x + dx, y: head.y + dy };
+
+            // Check for invalid moves (walls, self, locked portal)
+            const nextTile = get(newHead.x, newHead.y);
+            if (nextTile === 'W' || isWormAt(newHead.x, newHead.y) || (nextTile === 'P' && applesRemaining > 0)) {
+                isProcessing = false;
+                return;
+            }
+
+            // Move
+            worm.unshift(newHead);
+            moves++;
+            movesDisplay.textContent = moves;
+
+            // Check for apple
+            if (nextTile === 'A') {
+                targetLength++; // Grow by one
+                applesRemaining--;
+                applesDisplay.textContent = applesRemaining;
+                // Remove apple from map
+                levelData[newHead.y] = levelData[newHead.y].substring(0, newHead.x) + ' ' + levelData[newHead.y].substring(newHead.x + 1);
+            }
+            
+            // Trim tail if not growing
+            if (worm.length > targetLength) {
+                worm.pop();
+            }
+
+            draw();
+            await applyGravity();
+
+            // Check for win condition
+            if (get(newHead.x, newHead.y) === 'P' && applesRemaining === 0) {
+                showMessage(`Level ${levelNum} Complete!`, `You did it in ${moves} moves.`);
+                return; // isProcessing remains true
+            }
+            
+            isProcessing = false;
+        }
+
+        // --- Drawing Functions ---
+        function draw() {
+            if (!levelData) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw background
+            ctx.fillStyle = '#2d3748'; // bg-gray-800
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw grid elements
+            for (let y = 0; y < GRID_HEIGHT; y++) {
+                for (let x = 0; x < GRID_WIDTH; x++) {
+                    const char = get(x,y);
+                    if (char === 'W') {
+                        ctx.fillStyle = '#718096'; // gray-500
+                        ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    } else if (char === 'A') {
+                        ctx.fillStyle = '#f56565'; // red-500
+                        ctx.beginPath();
+                        ctx.arc(x * TILE_SIZE + TILE_SIZE / 2, y * TILE_SIZE + TILE_SIZE / 2, TILE_SIZE / 2.5, 0, 2 * Math.PI);
+                        ctx.fill();
+                    } else if (char === 'P') {
+                        // Portal is dim if locked, bright if open
+                        ctx.fillStyle = applesRemaining === 0 ? '#a78bfa' : '#5b21b6'; // bright violet-400 or dark violet-800
+                        ctx.beginPath();
+                        ctx.arc(x * TILE_SIZE + TILE_SIZE / 2, y * TILE_SIZE + TILE_SIZE / 2, TILE_SIZE / 2, 0, 2 * Math.PI);
+                        ctx.fill();
+                    }
+                }
+            }
+
+            // Draw worm
+            worm.forEach((segment, index) => {
+                ctx.fillStyle = index === 0 ? '#f6e05e' : '#68d391'; // yellow-300 head, green-400 body
+                ctx.fillRect(segment.x * TILE_SIZE, segment.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                ctx.strokeStyle = '#2d3748'; // bg-gray-800
+                ctx.strokeRect(segment.x * TILE_SIZE, segment.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            });
+        }
+
+        // --- Event Listeners ---
+        document.addEventListener('keydown', e => {
+            if (isProcessing) return;
+            switch (e.key) {
+                case 'ArrowUp': moveWorm(0, -1); break;
+                case 'ArrowDown': moveWorm(0, 1); break;
+                case 'ArrowLeft': moveWorm(-1, 0); break;
+                case 'ArrowRight': moveWorm(1, 0); break;
+            }
+        });
+
+        resetLevelButton.addEventListener('click', () => initLevel(levelNum));
+        resetGameButton.addEventListener('click', () => initLevel(1));
+        
+        messageButton.addEventListener('click', () => {
+            if (messageTitle.textContent.includes('You Win!')) {
+                initLevel(1);
+            } else {
+                initLevel(levelNum + 1);
+            }
+        });
+
+        window.addEventListener('resize', resizeCanvas);
+
+        // --- Initial Start ---
+        initLevel(1);
+    </script>
+</body>
+</html>
+
